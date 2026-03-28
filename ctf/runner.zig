@@ -9,6 +9,7 @@ pub const RunOpts = struct {
     dry_run: bool = false,
     filter: ?[]const u8 = null,
     cli_flags: ?[]const u8 = null,
+    jobs: usize = 1,
 };
 
 /// Returns true if all files passed clang-tidy (or dry-run).
@@ -67,38 +68,76 @@ pub fn run(
 
     if (opts.dry_run) return true;
 
-    // Build constant part of argv once: clang_tidy [flags] [--fix] [-p compile_commands]
-    var argv: std.ArrayList([]const u8) = .empty;
-    defer argv.deinit(allocator);
-    try argv.append(allocator, clang_tidy);
+    // Build base argv: clang_tidy [flags] [--fix] [-p compile_commands]
+    var base: std.ArrayList([]const u8) = .empty;
+    defer base.deinit(allocator);
+    try base.append(allocator, clang_tidy);
     var flag_iter = std.mem.tokenizeScalar(u8, raw_flags, ' ');
-    while (flag_iter.next()) |f| try argv.append(allocator, f);
-    if (opts.fix) try argv.append(allocator, "--fix");
+    while (flag_iter.next()) |f| try base.append(allocator, f);
+    if (opts.fix) try base.append(allocator, "--fix");
     if (compile_commands) |cc| {
-        try argv.append(allocator, "-p");
-        try argv.append(allocator, cc);
+        try base.append(allocator, "-p");
+        try base.append(allocator, cc);
     }
-    const base_len = argv.items.len;
 
     var all_passed = true;
 
-    for (files.items, 1..) |f, n| {
-        std.debug.print(green ++ "[ctf] [{d}/{d}] {s}" ++ reset ++ "\n", .{ n, files.items.len, f });
+    if (opts.jobs <= 1) {
+        // Sequential: one clang-tidy invocation with all files
+        var argv = try base.clone(allocator);
+        defer argv.deinit(allocator);
+        try argv.appendSlice(allocator, files.items);
 
-        try argv.append(allocator, f);
         var child = std.process.Child.init(argv.items, allocator);
         child.stdout_behavior = .Inherit;
         child.stderr_behavior = .Inherit;
         try child.spawn();
         const term = try child.wait();
-        argv.shrinkRetainingCapacity(base_len);
+        if (term != .Exited or term.Exited != 0) all_passed = false;
+    } else {
+        // Parallel: batches of `jobs` files, each file gets its own process
+        var children = try allocator.alloc(std.process.Child, opts.jobs);
+        defer allocator.free(children);
+        var argvs = try allocator.alloc(std.ArrayList([]const u8), opts.jobs);
+        defer allocator.free(argvs);
 
-        switch (term) {
-            .Exited => |code| if (code != 0) { all_passed = false; },
-            else => all_passed = false,
+        var i: usize = 0;
+        while (i < files.items.len) {
+            const batch_end = @min(i + opts.jobs, files.items.len);
+            const batch = files.items[i..batch_end];
+
+            for (batch, 0..) |f, bi| {
+                argvs[bi] = try base.clone(allocator);
+                try argvs[bi].append(allocator, f);
+                children[bi] = std.process.Child.init(argvs[bi].items, allocator);
+                children[bi].stdout_behavior = .Pipe;
+                children[bi].stderr_behavior = .Pipe;
+                try children[bi].spawn();
+            }
+
+            for (batch, 0..) |f, bi| {
+                defer argvs[bi].deinit(allocator);
+                // Read stdout first (blocks until process exits + closes pipe).
+                // stderr is tiny for clang-tidy (just the suppressed-warnings summary),
+                // so it never fills the pipe buffer while we drain stdout.
+                const out = try readPipe(allocator, children[bi].stdout.?);
+                defer allocator.free(out);
+                const err = try readPipe(allocator, children[bi].stderr.?);
+                defer allocator.free(err);
+                const term = try children[bi].wait();
+
+                std.debug.print(green ++ "[ctf] [{d}/{d}] {s}" ++ reset ++ "\n", .{ i + bi + 1, files.items.len, f });
+                if (out.len > 0) std.debug.print("{s}", .{out});
+                if (err.len > 0) std.debug.print("{s}", .{err});
+
+                switch (term) {
+                    .Exited => |code| if (code != 0) { all_passed = false; },
+                    else => all_passed = false,
+                }
+            }
+
+            i = batch_end;
         }
-
-        std.debug.print("\n", .{});
     }
 
     return all_passed;
@@ -118,6 +157,18 @@ fn matchGlob(pattern: []const u8, name: []const u8) bool {
     if (pattern[0] == '*') return std.mem.endsWith(u8, name, pattern[1..]);
     if (pattern[pattern.len - 1] == '*') return std.mem.startsWith(u8, name, pattern[0 .. pattern.len - 1]);
     return std.mem.eql(u8, pattern, name);
+}
+
+fn readPipe(allocator: std.mem.Allocator, file: std.fs.File) ![]u8 {
+    var list = std.ArrayList(u8).empty;
+    errdefer list.deinit(allocator);
+    var buf: [32 * 1024]u8 = undefined;
+    while (true) {
+        const n = try file.read(&buf);
+        if (n == 0) break;
+        try list.appendSlice(allocator, buf[0..n]);
+    }
+    return list.toOwnedSlice(allocator);
 }
 
 // --- tests ---

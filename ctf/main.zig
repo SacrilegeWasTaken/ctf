@@ -16,6 +16,7 @@ const Opts = struct {
     cli_fix: bool = false,
     cli_dry_run: bool = false,
     cli_filter: bool = false,
+    cli_jobs: bool = false,
 };
 
 /// Matches "--flag" or "--flag=value".
@@ -61,6 +62,7 @@ fn parseArgs(args: []const []const u8) !Opts {
     var cli_fix = false;
     var cli_dry_run = false;
     var cli_filter = false;
+    var cli_jobs = false;
 
     var i: usize = 3;
     while (i < args.len) : (i += 1) {
@@ -84,6 +86,15 @@ fn parseArgs(args: []const []const u8) !Opts {
                 break :blk args[i];
             };
             cli_filter = true;
+        } else if (parseFlag(arg, "--jobs")) |val| {
+            const s = val orelse blk: {
+                i += 1;
+                if (i >= args.len) return error.MissingValue;
+                break :blk args[i];
+            };
+            run_opts.jobs = std.fmt.parseInt(usize, s, 10) catch return error.InvalidJobs;
+            if (run_opts.jobs == 0) return error.InvalidJobs;
+            cli_jobs = true;
         } else if (std.mem.eql(u8, arg, "--fix")) {
             run_opts.fix = true;
             cli_fix = true;
@@ -104,6 +115,7 @@ fn parseArgs(args: []const []const u8) !Opts {
         .cli_fix = cli_fix,
         .cli_dry_run = cli_dry_run,
         .cli_filter = cli_filter,
+        .cli_jobs = cli_jobs,
     };
 }
 
@@ -120,7 +132,7 @@ pub fn main() !void {
             \\usage:
             \\  ctf list [--file ctf.toml]
             \\  ctf run <module|all> [--file ctf.toml] [--flags "..."] [--filter pattern]
-            \\             [--fix] [--dry-run]
+            \\             [--jobs N] [--fix] [--dry-run]
             \\error: {s}
             \\
         , .{@errorName(err)});
@@ -138,6 +150,7 @@ pub fn main() !void {
     if (!opts.cli_fix) run_opts.fix = cfg.fix;
     if (!opts.cli_dry_run) run_opts.dry_run = cfg.dry_run;
     if (!opts.cli_filter) run_opts.filter = cfg.filter;
+    if (!opts.cli_jobs) run_opts.jobs = cfg.jobs;
 
     switch (opts.command) {
         .list => {

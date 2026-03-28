@@ -14,6 +14,7 @@ pub const Config = struct {
     fix: bool,
     dry_run: bool,
     filter: ?[]const u8,
+    jobs: usize,
     modules: []const Module,
     arena: std.heap.ArenaAllocator,
 
@@ -46,6 +47,7 @@ fn parse(allocator: std.mem.Allocator, content: []const u8, arena: std.heap.Aren
     var fix = false;
     var dry_run = false;
     var filter: ?[]const u8 = null;
+    var jobs: usize = 1;
 
     var section: Section = .none;
     var cur_name: ?[]const u8 = null;
@@ -106,6 +108,9 @@ fn parse(allocator: std.mem.Allocator, content: []const u8, arena: std.heap.Aren
                     else if (std.mem.eql(u8, key, "filter")) {
                         const f = std.mem.trim(u8, val, "\"");
                         if (f.len > 0) filter = f;
+                    } else if (std.mem.eql(u8, key, "jobs")) {
+                        jobs = std.fmt.parseInt(usize, val, 10) catch 1;
+                        if (jobs == 0) jobs = 1;
                     }
                 },
                 .module => {
@@ -143,6 +148,7 @@ fn parse(allocator: std.mem.Allocator, content: []const u8, arena: std.heap.Aren
         .fix = fix,
         .dry_run = dry_run,
         .filter = filter,
+        .jobs = jobs,
 
         .modules = try modules.toOwnedSlice(allocator),
         .arena = arena,
