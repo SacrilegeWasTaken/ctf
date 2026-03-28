@@ -1,4 +1,4 @@
-# ctf — clang-tidy per module
+<h1 align="center">CTF - clang-tidy framework</h1>
 
 <p align="center">
   <img src="resources/logo-512.png" alt="ctf icon" width="512" />
