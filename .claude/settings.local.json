@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xcrun --sdk macosx --show-sdk-path)",
+      "Read(//Library/Developer/CommandLineTools/SDKs/**)",
+      "Read(//Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/**)",
+      "Bash(xcrun:*)",
+      "Bash(make build:*)",
+      "Bash(rm:*)",
+      "Bash(zig version:*)",
+      "Bash(nm:*)",
+      "Bash(ln:*)",
+      "Bash(/Users/vietnamveteran/Projects/Zig/ctf/Makefile:*)",
+      "Bash(make run:*)"
+    ]
+  }
+}
