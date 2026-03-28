@@ -54,11 +54,24 @@ fn parse(allocator: std.mem.Allocator, content: []const u8, arena: std.heap.Aren
     var cur_paths: std.ArrayList([]const u8) = .empty;
     var cur_files: []const u8 = "";
     var cur_flags: []const u8 = "";
+    var in_path_array = false;
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r");
         if (line.len == 0 or line[0] == '#') continue;
+
+        if (in_path_array) {
+            const close_idx = std.mem.indexOfScalar(u8, line, ']');
+            const content_part = line[0 .. close_idx orelse line.len];
+            var parts = std.mem.splitScalar(u8, content_part, ',');
+            while (parts.next()) |part| {
+                const p = std.mem.trim(u8, part, " \t\"");
+                if (p.len > 0) try cur_paths.append(allocator, p);
+            }
+            if (close_idx != null) in_path_array = false;
+            continue;
+        }
 
         if (std.mem.startsWith(u8, line, "[[")) {
             if (cur_name) |name| {
@@ -116,12 +129,14 @@ fn parse(allocator: std.mem.Allocator, content: []const u8, arena: std.heap.Aren
                 .module => {
                     if (std.mem.eql(u8, key, "path")) {
                         const open = std.mem.indexOfScalar(u8, val, '[') orelse return error.InvalidToml;
-                        const close = std.mem.indexOfScalar(u8, val, ']') orelse return error.InvalidToml;
-                        var parts = std.mem.splitScalar(u8, val[open + 1 .. close], ',');
+                        const close_idx = std.mem.indexOfScalar(u8, val, ']');
+                        const content_part = val[open + 1 .. close_idx orelse val.len];
+                        var parts = std.mem.splitScalar(u8, content_part, ',');
                         while (parts.next()) |part| {
                             const p = std.mem.trim(u8, part, " \t\"");
                             if (p.len > 0) try cur_paths.append(allocator, p);
                         }
+                        if (close_idx == null) in_path_array = true;
                     } else if (std.mem.eql(u8, key, "files"))
                         cur_files = std.mem.trim(u8, val, "\"")
                     else if (std.mem.eql(u8, key, "clang-tidy-flags"))
