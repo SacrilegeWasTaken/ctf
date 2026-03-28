@@ -1,5 +1,7 @@
 <h1 align="center">CTF - clang-tidy framework</h1>
 
+Configure your clang-tidy to proccess multiple types with explicit flags and flags. Declare modules in config file and run for each module separately.
+
 <p align="center">
   <img src="resources/logo-512.png" alt="ctf icon" width="512" />
 </p>
@@ -21,13 +23,13 @@ make install PREFIX=~/.local
 ```sh
 ctf list                          # show all modules
 ctf run all                       # run all modules
-ctf run ACd                       # run one module
-ctf run ACd --jobs=8              # override parallelism
-ctf run ACd --fix                 # apply fixes
-ctf run ACd --dry-run             # print files, don't run
-ctf run ACd --filter="*.cpp"      # only files matching pattern
-ctf run ACd --flags="--checks=*"  # override all flags for this run
-ctf run ACd --file=other.toml     # use a different config file
+ctf run AM                       # run one module
+ctf run AM --jobs=8              # override parallelism
+ctf run AM --fix                 # apply fixes
+ctf run AM --dry-run             # print files, don't run
+ctf run AM --filter="*.cpp"      # only files matching pattern
+ctf run AM --flags="--checks=*"  # override all flags for this run
+ctf run AM --file=other.toml     # use a different config file
 ```
 
 CLI flags take priority over `ctf.toml` values. `--flags` overrides both global and module flags entirely.
