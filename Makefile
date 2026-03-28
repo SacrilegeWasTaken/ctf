@@ -6,16 +6,30 @@ DEVELOPER_DIR := /Library/Developer/CommandLineTools
 export DEVELOPER_DIR
 export SDKROOT := $(CLT_SDK)
 
-.PHONY: run build test clean
+PREFIX ?= /usr/local
+
+.PHONY: run build test clean install uninstall
+
+ARGS ?=
 
 run:
-	zig build run
+	zig build run $(if $(ARGS),-- $(ARGS),)
+
+# Absorb extra targets so make doesn't complain
+%:
+	@:
 
 build:
 	zig build
 
 test:
 	zig build test
+
+install:
+	zig build -Doptimize=ReleaseSafe --prefix $(PREFIX)
+
+uninstall:
+	rm -f $(PREFIX)/bin/ctf
 
 clean:
 	rm -rf .zig-cache zig-out

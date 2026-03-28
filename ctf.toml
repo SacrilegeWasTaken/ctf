@@ -1,0 +1,19 @@
+[config]
+clang-tidy = "/usr/bin/clang-tidy"                                                                             
+clang-tidy-flags = "--checks=*"                                                                                
+compile-commands = "build/compile_commands.json"                                                               
+jobs = 4                                                                                                     
+fix = false                                                                                                    
+dry-run = false                                                                                                
+
+
+[modules]
+
+[[ACd]]
+path = ["src/ACd", "src/ACd/include"]
+files = "*.cpp,*.hpp,*.h,*.c"
+
+[[ACore]]
+path = ["src/ACore", "src/ACore/include"]
+files = "*.cpp,*.hpp,*.h,*.c"
+

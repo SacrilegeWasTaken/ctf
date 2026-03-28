@@ -11,7 +11,13 @@
       "Bash(nm:*)",
       "Bash(ln:*)",
       "Bash(/Users/vietnamveteran/Projects/Zig/ctf/Makefile:*)",
-      "Bash(make run:*)"
+      "Bash(make run:*)",
+      "Bash(nix:*)",
+      "Bash(git:*)",
+      "Bash(nix log:*)",
+      "Bash(./result/bin/ctf:*)",
+      "Bash(make test:*)",
+      "Bash(make install:*)"
     ]
   }
 }
