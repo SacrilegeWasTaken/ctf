@@ -9,86 +9,7 @@ pub const RunOpts = struct {
     dry_run: bool = false,
     filter: ?[]const u8 = null,
     cli_flags: ?[]const u8 = null,
-    jobs: usize = 1,
 };
-
-const SharedCtx = struct {
-    mutex: std.Thread.Mutex = .{},
-    failed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    counter: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-    total: usize,
-};
-
-const FileTask = struct {
-    clang_tidy: []const u8,
-    flag_args: []const []const u8,
-    compile_commands: ?[]const u8,
-    file: []const u8,
-    dry_run: bool,
-    ctx: *SharedCtx,
-};
-
-fn runFileThread(task: FileTask) void {
-    const n = task.ctx.counter.fetchAdd(1, .monotonic) + 1;
-
-    task.ctx.mutex.lock();
-    std.debug.print(green ++ "[ctf] [{d}/{d}] {s}" ++ reset ++ "\n", .{ n, task.ctx.total, task.file });
-    task.ctx.mutex.unlock();
-
-    if (task.dry_run) return;
-
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-
-    var argv: std.ArrayList([]const u8) = .empty;
-    argv.append(alloc, task.clang_tidy) catch return;
-    argv.appendSlice(alloc, task.flag_args) catch return;
-    if (task.compile_commands) |cc| {
-        argv.append(alloc, "-p") catch return;
-        argv.append(alloc, cc) catch return;
-    }
-    argv.append(alloc, task.file) catch return;
-
-    var child = std.process.Child.init(argv.items, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.spawn() catch {
-        task.ctx.failed.store(true, .monotonic);
-        return;
-    };
-
-    // Read stdout and stderr in parallel to avoid pipe buffer deadlock.
-    const Capture = struct {
-        file: std.fs.File,
-        result: []const u8 = "",
-        fn run(self: *@This()) void {
-            var capture_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            self.result = self.file.readToEndAlloc(capture_arena.allocator(), 50 * 1024 * 1024) catch "";
-        }
-    };
-    var cap_out = Capture{ .file = child.stdout.? };
-    var cap_err = Capture{ .file = child.stderr.? };
-    const t_out = std.Thread.spawn(.{}, Capture.run, .{&cap_out}) catch null;
-    const t_err = std.Thread.spawn(.{}, Capture.run, .{&cap_err}) catch null;
-    if (t_out) |t| t.join();
-    if (t_err) |t| t.join();
-
-    const term = child.wait() catch {
-        task.ctx.failed.store(true, .monotonic);
-        return;
-    };
-
-    task.ctx.mutex.lock();
-    defer task.ctx.mutex.unlock();
-    if (cap_out.result.len > 0) std.fs.File.stdout().writeAll(cap_out.result) catch {};
-    if (cap_err.result.len > 0) std.fs.File.stderr().writeAll(cap_err.result) catch {};
-
-    switch (term) {
-        .Exited => |code| if (code != 0) task.ctx.failed.store(true, .monotonic),
-        else => task.ctx.failed.store(true, .monotonic),
-    }
-}
 
 /// Returns true if all files passed clang-tidy (or dry-run).
 pub fn run(
@@ -99,20 +20,16 @@ pub fn run(
     opts: RunOpts,
     mod: config.Module,
 ) !bool {
-    // Priority: CLI > per-module > global
-    const raw_flags = opts.cli_flags orelse
-        (if (mod.clang_tidy_flags.len > 0) mod.clang_tidy_flags else global_flags);
+    // Priority: CLI overrides all; otherwise global + module are concatenated.
+    const raw_flags = if (opts.cli_flags) |f| f else blk: {
+        if (global_flags.len == 0) break :blk mod.clang_tidy_flags;
+        if (mod.clang_tidy_flags.len == 0) break :blk global_flags;
+        break :blk try std.mem.concat(allocator, u8, &.{ global_flags, " ", mod.clang_tidy_flags });
+    };
+    defer if (opts.cli_flags == null and global_flags.len > 0 and mod.clang_tidy_flags.len > 0)
+        allocator.free(raw_flags);
 
-    // Collect patterns
-    var patterns: std.ArrayList([]const u8) = .empty;
-    defer patterns.deinit(allocator);
-    var pat_iter = std.mem.splitScalar(u8, mod.files, ',');
-    while (pat_iter.next()) |p| {
-        const t = std.mem.trim(u8, p, " \t");
-        if (t.len > 0) try patterns.append(allocator, t);
-    }
-
-    // Collect matching files
+    // Collect files matching patterns
     var files: std.ArrayList([]const u8) = .empty;
     defer {
         for (files.items) |f| allocator.free(f);
@@ -130,12 +47,9 @@ pub fn run(
         while (try iter.next()) |entry| {
             if (entry.kind != .file) continue;
             if (opts.filter) |f| if (!matchGlob(f, entry.name)) continue;
-            for (patterns.items) |pat| {
-                if (matchGlob(pat, entry.name)) {
-                    const full = try std.fs.path.join(allocator, &.{ path, entry.name });
-                    try files.append(allocator, full);
-                    break;
-                }
+            if (matchesPatterns(entry.name, mod.files)) {
+                const full = try std.fs.path.join(allocator, &.{ path, entry.name });
+                try files.append(allocator, full);
             }
         }
     }
@@ -151,40 +65,52 @@ pub fn run(
         if (opts.dry_run) " (dry run)" else "",
     });
 
-    // Build shared flag_args (read-only across threads)
-    var flag_list: std.ArrayList([]const u8) = .empty;
-    defer flag_list.deinit(allocator);
+    if (opts.dry_run) return true;
+
+    // Build constant part of argv once: clang_tidy [flags] [--fix] [-p compile_commands]
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(allocator);
+    try argv.append(allocator, clang_tidy);
     var flag_iter = std.mem.tokenizeScalar(u8, raw_flags, ' ');
-    while (flag_iter.next()) |f| try flag_list.append(allocator, f);
-    if (opts.fix) try flag_list.append(allocator, "--fix");
+    while (flag_iter.next()) |f| try argv.append(allocator, f);
+    if (opts.fix) try argv.append(allocator, "--fix");
+    if (compile_commands) |cc| {
+        try argv.append(allocator, "-p");
+        try argv.append(allocator, cc);
+    }
+    const base_len = argv.items.len;
 
-    var ctx = SharedCtx{ .total = files.items.len };
+    var all_passed = true;
 
-    // Process in batches of `jobs`
-    var i: usize = 0;
-    while (i < files.items.len) {
-        const end = @min(i + opts.jobs, files.items.len);
-        const batch = files.items[i..end];
+    for (files.items, 1..) |f, n| {
+        std.debug.print(green ++ "[ctf] [{d}/{d}] {s}" ++ reset ++ "\n", .{ n, files.items.len, f });
 
-        const handles = try allocator.alloc(std.Thread, batch.len);
-        defer allocator.free(handles);
+        try argv.append(allocator, f);
+        var child = std.process.Child.init(argv.items, allocator);
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+        try child.spawn();
+        const term = try child.wait();
+        argv.shrinkRetainingCapacity(base_len);
 
-        for (batch, 0..) |f, j| {
-            handles[j] = try std.Thread.spawn(.{}, runFileThread, .{FileTask{
-                .clang_tidy = clang_tidy,
-                .flag_args = flag_list.items,
-                .compile_commands = compile_commands,
-                .file = f,
-                .dry_run = opts.dry_run,
-                .ctx = &ctx,
-            }});
+        switch (term) {
+            .Exited => |code| if (code != 0) { all_passed = false; },
+            else => all_passed = false,
         }
-        for (handles) |h| h.join();
 
-        i = end;
+        std.debug.print("\n", .{});
     }
 
-    return !ctx.failed.load(.monotonic);
+    return all_passed;
+}
+
+fn matchesPatterns(name: []const u8, patterns: []const u8) bool {
+    var iter = std.mem.splitScalar(u8, patterns, ',');
+    while (iter.next()) |p| {
+        const pat = std.mem.trim(u8, p, " \t");
+        if (pat.len > 0 and matchGlob(pat, name)) return true;
+    }
+    return false;
 }
 
 fn matchGlob(pattern: []const u8, name: []const u8) bool {
@@ -219,4 +145,10 @@ test "matchGlob: exact" {
     try std.testing.expect(matchGlob("main.cpp", "main.cpp"));
     try std.testing.expect(!matchGlob("main.cpp", "main.h"));
     try std.testing.expect(!matchGlob("main.cpp", "xmain.cpp"));
+}
+
+test "matchesPatterns: multi-pattern" {
+    try std.testing.expect(matchesPatterns("foo.cpp", "*.cpp,*.hpp"));
+    try std.testing.expect(matchesPatterns("foo.hpp", "*.cpp,*.hpp"));
+    try std.testing.expect(!matchesPatterns("foo.h", "*.cpp,*.hpp"));
 }

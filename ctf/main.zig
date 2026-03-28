@@ -16,7 +16,6 @@ const Opts = struct {
     cli_fix: bool = false,
     cli_dry_run: bool = false,
     cli_filter: bool = false,
-    cli_jobs: bool = false,
 };
 
 /// Matches "--flag" or "--flag=value".
@@ -62,7 +61,6 @@ fn parseArgs(args: []const []const u8) !Opts {
     var cli_fix = false;
     var cli_dry_run = false;
     var cli_filter = false;
-    var cli_jobs = false;
 
     var i: usize = 3;
     while (i < args.len) : (i += 1) {
@@ -86,15 +84,6 @@ fn parseArgs(args: []const []const u8) !Opts {
                 break :blk args[i];
             };
             cli_filter = true;
-        } else if (parseFlag(arg, "--jobs")) |val| {
-            const s = val orelse blk: {
-                i += 1;
-                if (i >= args.len) return error.MissingValue;
-                break :blk args[i];
-            };
-            run_opts.jobs = std.fmt.parseInt(usize, s, 10) catch return error.InvalidJobs;
-            if (run_opts.jobs == 0) return error.InvalidJobs;
-            cli_jobs = true;
         } else if (std.mem.eql(u8, arg, "--fix")) {
             run_opts.fix = true;
             cli_fix = true;
@@ -115,7 +104,6 @@ fn parseArgs(args: []const []const u8) !Opts {
         .cli_fix = cli_fix,
         .cli_dry_run = cli_dry_run,
         .cli_filter = cli_filter,
-        .cli_jobs = cli_jobs,
     };
 }
 
@@ -132,7 +120,7 @@ pub fn main() !void {
             \\usage:
             \\  ctf list [--file ctf.toml]
             \\  ctf run <module|all> [--file ctf.toml] [--flags "..."] [--filter pattern]
-            \\             [--jobs N] [--fix] [--dry-run]
+            \\             [--fix] [--dry-run]
             \\error: {s}
             \\
         , .{@errorName(err)});
@@ -150,7 +138,6 @@ pub fn main() !void {
     if (!opts.cli_fix) run_opts.fix = cfg.fix;
     if (!opts.cli_dry_run) run_opts.dry_run = cfg.dry_run;
     if (!opts.cli_filter) run_opts.filter = cfg.filter;
-    if (!opts.cli_jobs) run_opts.jobs = cfg.jobs;
 
     switch (opts.command) {
         .list => {
@@ -236,7 +223,6 @@ test "parseArgs: basic run" {
     try std.testing.expect(opts.run_opts.cli_flags == null);
     try std.testing.expect(!opts.run_opts.fix);
     try std.testing.expect(!opts.run_opts.dry_run);
-    try std.testing.expectEqual(@as(usize, 1), opts.run_opts.jobs);
 }
 
 test "parseArgs: run all" {
@@ -276,18 +262,6 @@ test "parseArgs: --fix and --dry-run" {
     try std.testing.expect(opts.run_opts.dry_run);
 }
 
-test "parseArgs: --jobs=4" {
-    const opts = try parseArgs(&.{ "ctf", "run", "ACd", "--jobs=4" });
-    try std.testing.expectEqual(@as(usize, 4), opts.run_opts.jobs);
-}
-
-test "parseArgs: --jobs 0 is invalid" {
-    try std.testing.expectError(error.InvalidJobs, parseArgs(&.{ "ctf", "run", "ACd", "--jobs=0" }));
-}
-
-test "parseArgs: --jobs not a number" {
-    try std.testing.expectError(error.InvalidJobs, parseArgs(&.{ "ctf", "run", "ACd", "--jobs=abc" }));
-}
 
 test "parseArgs: --filter=pattern" {
     const opts = try parseArgs(&.{ "ctf", "run", "ACd", "--filter=*.cpp" });
@@ -302,9 +276,6 @@ test "parseArgs: --flags missing value" {
     try std.testing.expectError(error.MissingValue, parseArgs(&.{ "ctf", "run", "ACd", "--flags" }));
 }
 
-test "parseArgs: --jobs missing value" {
-    try std.testing.expectError(error.MissingValue, parseArgs(&.{ "ctf", "run", "ACd", "--jobs" }));
-}
 
 test "parseArgs: unknown flag" {
     try std.testing.expectError(error.UnknownFlag, parseArgs(&.{ "ctf", "run", "ACd", "--unknown" }));
@@ -317,7 +288,6 @@ test "parseArgs: all flags combined" {
         "--file=a.toml",
         "--flags=--checks=*",
         "--filter=*.cpp",
-        "--jobs=8",
         "--fix",
         "--dry-run",
     });
@@ -325,7 +295,6 @@ test "parseArgs: all flags combined" {
     try std.testing.expectEqualStrings("a.toml", opts.config_file);
     try std.testing.expectEqualStrings("--checks=*", opts.run_opts.cli_flags.?);
     try std.testing.expectEqualStrings("*.cpp", opts.run_opts.filter.?);
-    try std.testing.expectEqual(@as(usize, 8), opts.run_opts.jobs);
     try std.testing.expect(opts.run_opts.fix);
     try std.testing.expect(opts.run_opts.dry_run);
 }
