@@ -108,6 +108,7 @@ pub fn run(
 
             for (batch, 0..) |f, bi| {
                 argvs[bi] = try base.clone(allocator);
+                try argvs[bi].append(allocator, "--use-color");
                 try argvs[bi].append(allocator, f);
                 children[bi] = std.process.Child.init(argvs[bi].items, allocator);
                 children[bi].stdout_behavior = .Pipe;
