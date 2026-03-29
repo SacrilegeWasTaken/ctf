@@ -82,8 +82,10 @@ pub fn run(
 
     var all_passed = true;
 
-    if (opts.jobs <= 1) {
-        // Sequential: one clang-tidy invocation with all files
+    if (opts.jobs <= 1 or opts.fix) {
+        // Sequential: one clang-tidy invocation with all files.
+        // fix mode is always sequential — parallel clang-tidy --fix causes race
+        // conditions when multiple processes write to the same header file.
         var argv = try base.clone(allocator);
         defer argv.deinit(allocator);
         try argv.appendSlice(allocator, files.items);
